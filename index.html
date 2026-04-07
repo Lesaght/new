@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>ИИ-Помощник (Чат и Файлы)</title>
+    <script src="https://js.puter.com/v2/"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1e1e1e; color: #d4d4d4; padding: 20px; margin: 0; }
+        .container { max-width: 700px; margin: 0 auto; background: #252526; padding: 20px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+        
+        /* Панель авторизации */
+        .auth-panel { background: #2d2d30; padding: 15px; border-radius: 6px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #3e3e42; }
+        .auth-panel span { font-size: 14px; color: #cccccc; }
+        
+        button { background-color: #007acc; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer; font-weight: bold; transition: 0.2s; }
+        button:hover { background-color: #005f9e; }
+        button:disabled { background-color: #555; cursor: not-allowed; color: #888; }
+        
+        h2 { margin-top: 0; color: #4fc1ff; font-size: 20px; margin-bottom: 15px; }
+        
+        #status { padding: 10px; border-radius: 4px; background: #333; margin-bottom: 15px; font-weight: bold; font-size: 14px; border-left: 5px solid #d7ba7d; }
+        .status-ready { border-left-color: #89d185 !important; }
+        .status-wait { border-left-color: #d7ba7d !important; }
+        .status-error { border-left-color: #f48771 !important; }
+        
+        /* Зона ввода */
+        .input-area { background: #1e1e1e; border: 1px solid #3e3e42; border-radius: 6px; padding: 10px; margin-bottom: 15px; }
+        #prompt-input { width: 100%; background: transparent; border: none; color: #fff; font-size: 14px; font-family: inherit; resize: vertical; min-height: 60px; outline: none; margin-bottom: 10px; }
+        
+        .controls { display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #3e3e42; padding-top: 10px; }
+        .controls-left { display: flex; gap: 10px; align-items: center; }
+        
+        /* Отображение прикрепленного файла */
+        #attachment-badge { display: none; background: #333; padding: 5px 10px; border-radius: 15px; font-size: 12px; border: 1px solid #555; align-items: center; gap: 5px; }
+        #remove-attachment { cursor: pointer; color: #f48771; font-weight: bold; }
+        
+        #result { width: 100%; height: 300px; background: #1e1e1e; color: #d4d4d4; border: 1px solid #3e3e42; padding: 15px; border-radius: 4px; resize: vertical; box-sizing: border-box; font-family: 'Consolas', monospace; font-size: 14px; white-space: pre-wrap; outline: none; }
+        #preview { max-width: 100%; max-height: 200px; display: none; margin-bottom: 10px; border: 1px solid #3e3e42; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="auth-panel">
+            <span id="user-info">Подключение к серверу-посреднику...</span>
+            <button id="btn-login" style="display: none;">Подключить мост</button>
+            <button id="btn-logout" style="display: none; background-color: #c9383b;">Отключить</button>
+        </div>
+
+        <h2>ИИ-Помощник</h2>
+        <div id="status" class="status-wait">⏳ Ожидание авторизации...</div>
+        
+        <img id="preview" alt="Скриншот">
+        
+        <div class="input-area">
+            <textarea id="prompt-input" placeholder="Введите ваш вопрос или инструкцию здесь... (можно нажать Ctrl+V для вставки картинки)"></textarea>
+            
+            <div class="controls">
+                <div class="controls-left">
+                    <input type="file" id="file-input" style="display: none;" accept="image/*,.txt,.py,.js,.html,.css,.json,.csv,.md">
+                    <button id="btn-attach" style="background-color: #444;">📎 Прикрепить</button>
+                    
+                    <div id="attachment-badge">
+                        <span id="attachment-name">файл</span>
+                        <span id="remove-attachment" title="Удалить файл">✖</span>
+                    </div>
+                </div>
+                <button id="btn-send" disabled>Отправить 🚀</button>
+            </div>
+        </div>
+
+        <textarea id="result" placeholder="Ответ появится здесь..." readonly></textarea>
+    </div>
+
+    <script>
+        const statusEl = document.getElementById('status');
+        const resultEl = document.getElementById('result');
+        const previewEl = document.getElementById('preview');
+        const userInfoEl = document.getElementById('user-info');
+        const btnLogin = document.getElementById('btn-login');
+        const btnLogout = document.getElementById('btn-logout');
+        
+        // Новые элементы
+        const promptInput = document.getElementById('prompt-input');
+        const btnAttach = document.getElementById('btn-attach');
+        const fileInput = document.getElementById('file-input');
+        const btnSend = document.getElementById('btn-send');
+        const attachmentBadge = document.getElementById('attachment-badge');
+        const attachmentName = document.getElementById('attachment-name');
+        const removeAttachmentBtn = document.getElementById('remove-attachment');
+
+        // Переменные для хранения данных файла
+        let currentImageBase64 = null;
+        let currentTextFileContent = null;
+
+        // --- АВТОРИЗАЦИЯ ---
+        async function updateAuthUI() {
+            const signedIn = await puter.auth.isSignedIn();
+            if (signedIn) {
+                const user = await puter.auth.getUser();
+                userInfoEl.innerHTML = `Мост активен (<b>${user.username}</b>)`;
+                btnLogin.style.display = 'none';
+                btnLogout.style.display = 'inline-block';
+                btnSend.disabled = false;
+                setStatus("🟢 Готов к работе", "status-ready");
+            } else {
+                userInfoEl.innerHTML = "Мост отключен.";
+                btnLogin.style.display = 'inline-block';
+                btnLogout.style.display = 'none';
+                btnSend.disabled = true;
+                setStatus("❌ Войди в аккаунт, чтобы активировать ИИ", "status-error");
+            }
+        }
+
+        btnLogin.addEventListener('click', async () => { await puter.auth.signIn(); updateAuthUI(); });
+        btnLogout.addEventListener('click', async () => { await puter.auth.signOut(); updateAuthUI(); });
+        updateAuthUI();
+
+        // --- РАБОТА С ФАЙЛАМИ ---
+        btnAttach.addEventListener('click', () => fileInput.click());
+
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            processFile(file);
+        });
+
+        // Вставка по Ctrl+V
+        document.addEventListener('paste', (e) => {
+            const items = e.clipboardData.items;
+            for (let i = 0; i < items.length; i++) {
+                if (items[i].type.indexOf('image') !== -1) {
+                    const file = items[i].getAsFile();
+                    processFile(file);
+                    break;
+                }
+            }
+        });
+
+        function processFile(file) {
+            clearAttachment(); // Очищаем предыдущий
+            
+            const reader = new FileReader();
+            
+            // Если это картинка
+            if (file.type.startsWith('image/')) {
+                reader.onload = (event) => {
+                    currentImageBase64 = event.target.result;
+                    previewEl.src = currentImageBase64;
+                    previewEl.style.display = "block";
+                    showBadge(file.name || "Скриншот.png");
+                };
+                reader.readAsDataURL(file);
+            } 
+            // Если это текст или код
+            else {
+                reader.onload = (event) => {
+                    currentTextFileContent = `\n\n--- Содержимое прикрепленного файла (${file.name}) ---\n${event.target.result}\n--- Конец файла ---`;
+                    showBadge(file.name);
+                };
+                reader.readAsText(file);
+            }
+        }
+
+        function showBadge(name) {
+            attachmentName.innerText = name;
+            attachmentBadge.style.display = "flex";
+        }
+
+        function clearAttachment() {
+            currentImageBase64 = null;
+            currentTextFileContent = null;
+            previewEl.style.display = "none";
+            previewEl.src = "";
+            attachmentBadge.style.display = "none";
+            fileInput.value = "";
+        }
+
+        removeAttachmentBtn.addEventListener('click', clearAttachment);
+
+        // --- ОТПРАВКА ЗАПРОСА ---
+        btnSend.addEventListener('click', async () => {
+            let promptText = promptInput.value.trim();
+            
+            // Если запрос пустой, ставим стандартный
+            if (!promptText && (currentImageBase64 || currentTextFileContent)) {
+                promptText = "Проанализируй прикрепленный файл и дай подробный ответ на русском языке.";
+            } else if (!promptText) {
+                setStatus("❌ Введите запрос или прикрепите файл!", "status-error");
+                return;
+            }
+
+            // Если прикреплен текстовый файл, добавляем его текст скрыто к запросу
+            if (currentTextFileContent) {
+                promptText += currentTextFileContent;
+            }
+
+            setStatus("⏳ Нейросеть думает...", "status-wait");
+            resultEl.value = "";
+            btnSend.disabled = true;
+
+            try {
+                let response;
+                // Если есть картинка, отправляем мультимодальный запрос
+                if (currentImageBase64) {
+                    response = await puter.ai.chat(promptText, currentImageBase64, { model: 'google/gemini-2.5-flash' });
+                } else {
+                    // Если картинки нет (только текст или текстовый файл)
+                    response = await puter.ai.chat(promptText, { model: 'google/gemini-2.5-flash' });
+                }
+                
+                // Умная распаковка ответа
+                let finalAnswer = "";
+                if (typeof response === 'string') {
+                    finalAnswer = response;
+                } else if (response && response.message && response.message.content) {
+                    finalAnswer = response.message.content;
+                } else if (response && response.text) {
+                    finalAnswer = response.text;
+                } else {
+                    finalAnswer = JSON.stringify(response, null, 2);
+                }
+                
+                resultEl.value = finalAnswer;
+                setStatus("✅ Ответ получен!", "status-ready");
+                
+            } catch (error) {
+                setStatus("❌ Ошибка: " + error.message, "status-error");
+            } finally {
+                btnSend.disabled = false;
+            }
+        });
+
+        // Отправка по нажатию Enter (если не зажат Shift)
+        promptInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                if (!btnSend.disabled) btnSend.click();
+            }
+        });
+
+        function setStatus(text, className) {
+            statusEl.innerText = text;
+            statusEl.className = className;
+        }
+    </script>
+</body>
+</html>
